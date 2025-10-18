@@ -44,6 +44,111 @@
   const speech = document.getElementById('speech');
   const dangerOverlay = document.getElementById('dangerOverlay');
 
+  // Audio setup
+  function createSound(src, { loop = false, volume = 1 } = {}) {
+    const audio = new Audio(src);
+    audio.loop = loop;
+    audio.volume = volume;
+    audio.preload = 'auto';
+    return audio;
+  }
+
+  const sounds = {
+    opening: createSound('assets/sounds/opening.mp3', { loop: true }),
+    during: createSound('assets/sounds/during.mp3', { loop: true }),
+    momvoice: createSound('assets/sounds/momvoice.mp3'),
+    packing: createSound('assets/sounds/packing.wav'),
+    upgrade1: createSound('assets/sounds/upgrade1.wav'),
+    upgrade2: createSound('assets/sounds/upgrade2.wav'),
+  };
+
+  const pendingSoundRequests = new Map();
+  let audioUnlockHandlerAttached = false;
+
+  function attemptSoundPlay(key) {
+    const audio = sounds[key];
+    const opts = pendingSoundRequests.get(key);
+    if (!audio || !opts) return;
+    if (opts.reset) {
+      audio.pause();
+      audio.currentTime = 0;
+    }
+    try {
+      const playResult = audio.play();
+      if (playResult && typeof playResult.then === 'function') {
+        playResult.then(() => {
+          pendingSoundRequests.delete(key);
+          if (!pendingSoundRequests.size) detachAudioUnlockHandler();
+        }).catch(() => {
+          attachAudioUnlockHandler();
+        });
+      } else {
+        pendingSoundRequests.delete(key);
+        if (!pendingSoundRequests.size) detachAudioUnlockHandler();
+      }
+    } catch (_err) {
+      attachAudioUnlockHandler();
+    }
+  }
+
+  function playSound(key, options = {}) {
+    const opts = { reset: true, ...options };
+    pendingSoundRequests.set(key, opts);
+    attemptSoundPlay(key);
+  }
+
+  function stopSound(key, { reset = true } = {}) {
+    const audio = sounds[key];
+    if (!audio) return;
+    pendingSoundRequests.delete(key);
+    audio.pause();
+    if (reset) audio.currentTime = 0;
+  }
+
+  function attachAudioUnlockHandler() {
+    if (audioUnlockHandlerAttached) return;
+    audioUnlockHandlerAttached = true;
+    window.addEventListener('pointerdown', unlockPendingSoundsOnce, { once: true });
+    window.addEventListener('keydown', unlockPendingSoundsOnce, { once: true });
+  }
+
+  function detachAudioUnlockHandler() {
+    if (!audioUnlockHandlerAttached) return;
+    window.removeEventListener('pointerdown', unlockPendingSoundsOnce);
+    window.removeEventListener('keydown', unlockPendingSoundsOnce);
+    audioUnlockHandlerAttached = false;
+  }
+
+  function unlockPendingSoundsOnce() {
+    pendingSoundRequests.forEach((_opts, key) => {
+      attemptSoundPlay(key);
+    });
+    const stillLocked = pendingSoundRequests.size > 0;
+    detachAudioUnlockHandler();
+    if (stillLocked) attachAudioUnlockHandler();
+  }
+
+  function ensureOpeningMusic() {
+    if (!sounds.opening) return;
+    if (sounds.opening.paused) {
+      playSound('opening');
+    }
+  }
+
+  function playUpgradeSequence() {
+    const first = sounds.upgrade1;
+    const second = sounds.upgrade2;
+    if (!first || !second) return;
+    first.pause(); first.currentTime = 0;
+    second.pause(); second.currentTime = 0;
+    const handler = () => {
+      first.removeEventListener('ended', handler);
+      playSound('upgrade2');
+    };
+    first.addEventListener('ended', handler, { once: true });
+    playSound('upgrade1');
+  }
+
   // Helpers
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const lerp = (a,b,t) => a + (b-a)*t;
@@ -158,7 +263,8 @@
       usedCapacity: 0,
       tierIdx,
       capacity: tier.capacity,
-      momGap: START_DISTANCE
+      momGap: START_DISTANCE,
+      momWarningActive: false,
     };
 
     // Seed shelves
@@ -180,7 +286,12 @@
     // Danger overlay intensifies when gap <= 2
     const dangerAlpha = clamp(1 - (state.momGap / 2), 0, 1);
     dangerOverlay.style.opacity = (dangerAlpha * 0.9).toFixed(2);
-    if (state.momGap <= WARNING_DISTANCE) {
+    const isWarning = state.momGap <= WARNING_DISTANCE;
+    if (isWarning && !state.momWarningActive) {
+      playSound('momvoice');
+    }
+    state.momWarningActive = isWarning;
+    if (isWarning) {
       speech.classList.remove('hidden');
     } else {
       speech.classList.add('hidden');
@@ -296,13 +407,17 @@
     startScreen.classList.add('hidden');
     startScreen.classList.remove('visible');
     gameOver.classList.add('hidden');
+    stopSound('opening');
+    playSound('during');
     requestAnimationFrame(tick);
   }
 
   function endGame(){
     state.running = false; state.over = true;
+    stopSound('during');
     finalScoreEl.textContent = String(state.score);
     gameOver.classList.remove('hidden');
+    ensureOpeningMusic();
   }
 
   function retry(){
@@ -312,9 +427,14 @@
 
   function upgradeCart(){
     const next = Math.min(state.tierIdx + 1, TIERS.length - 1);
-    if (next !== state.tierIdx) setTierIndex(next);
+    if (next !== state.tierIdx) {
+      setTierIndex(next);
+      playUpgradeSequence();
+    }
     initState();
-    startGame();
+    ensureOpeningMusic();
+    // Keep game-over overlay visible; player can decide to restart manually.
+    gameOver.classList.remove('hidden');
   }
 
   // Buttons
@@ -380,6 +500,7 @@
       state.speedModifier += 0.02;
       const baseScore = picked.type.score || 10;
       state.score += baseScore * (1 + Math.floor(state.combo/10));
+      playSound('packing');
     }
     state.momGap += 1; // gain some distance on pick
 
@@ -425,4 +546,5 @@
 
   // Bootstrap
   initState();
+  ensureOpeningMusic();
 })();
