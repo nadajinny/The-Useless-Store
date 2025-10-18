@@ -43,116 +43,128 @@
   const finalScoreEl = document.getElementById('finalScore');
   const speech = document.getElementById('speech');
   const dangerOverlay = document.getElementById('dangerOverlay');
+  // Auth/UI elements
+  const loginBtn = document.getElementById('loginBtn');
+  const logoutBtn = document.getElementById('logoutBtn');
+  const userEmailEl = document.getElementById('userEmail');
+  const myScoreBtn = document.getElementById('myScoreBtn');
+  const authModal = document.getElementById('authModal');
+  const authName = document.getElementById('authName');
+  const authEmail = document.getElementById('authEmail');
+  const authPassword = document.getElementById('authPassword');
+  const doLogin = document.getElementById('doLogin');
+  const doSignup = document.getElementById('doSignup');
+  const closeAuth = document.getElementById('closeAuth');
+  const authMsg = document.getElementById('authMsg');
+  const myScores = document.getElementById('myScores');
+  const bestScoreEl = document.getElementById('bestScore');
+  const recentScoresEl = document.getElementById('recentScores');
+  const closeScores = document.getElementById('closeScores');
 
   // Audio setup
-  function createSound(src, { loop = false, volume = 1 } = {}) {
+  function makeAudio(src, { loop = false } = {}) {
     const audio = new Audio(src);
     audio.loop = loop;
-    audio.volume = volume;
     audio.preload = 'auto';
     return audio;
   }
 
-  const sounds = {
-    opening: createSound('assets/sounds/opening.mp3', { loop: true }),
-    during: createSound('assets/sounds/during.mp3', { loop: true }),
-    momvoice: createSound('assets/sounds/momvoice.mp3'),
-    packing: createSound('assets/sounds/packing.wav'),
-    upgrade1: createSound('assets/sounds/upgrade1.wav'),
-    upgrade2: createSound('assets/sounds/upgrade2.wav'),
-  };
-
-  const pendingSoundRequests = new Map();
-  let audioUnlockHandlerAttached = false;
-
-  function attemptSoundPlay(key) {
-    const audio = sounds[key];
-    const opts = pendingSoundRequests.get(key);
-    if (!audio || !opts) return;
-    if (opts.reset) {
+  function playSound(audio, { reset = true } = {}) {
+    if (!audio) return;
+    if (reset) {
       audio.pause();
       audio.currentTime = 0;
     }
-    try {
-      const playResult = audio.play();
-      if (playResult && typeof playResult.then === 'function') {
-        playResult.then(() => {
-          pendingSoundRequests.delete(key);
-          if (!pendingSoundRequests.size) detachAudioUnlockHandler();
-        }).catch(() => {
-          attachAudioUnlockHandler();
-        });
-      } else {
-        pendingSoundRequests.delete(key);
-        if (!pendingSoundRequests.size) detachAudioUnlockHandler();
-      }
-    } catch (_err) {
-      attachAudioUnlockHandler();
+    const playPromise = audio.play();
+    if (playPromise && typeof playPromise.catch === 'function') {
+      playPromise.catch(() => {});
     }
   }
 
-  function playSound(key, options = {}) {
-    const opts = { reset: true, ...options };
-    pendingSoundRequests.set(key, opts);
-    attemptSoundPlay(key);
-  }
-
-  function stopSound(key, { reset = true } = {}) {
-    const audio = sounds[key];
+  function stopSound(audio, { reset = true } = {}) {
     if (!audio) return;
-    pendingSoundRequests.delete(key);
     audio.pause();
     if (reset) audio.currentTime = 0;
   }
 
-  function attachAudioUnlockHandler() {
-    if (audioUnlockHandlerAttached) return;
-    audioUnlockHandlerAttached = true;
-    window.addEventListener('pointerdown', unlockPendingSoundsOnce, { once: true });
-    window.addEventListener('keydown', unlockPendingSoundsOnce, { once: true });
+  const sounds = {
+    opening: makeAudio('assets/sounds/opening.mp3', { loop: true }),
+    during: makeAudio('assets/sounds/during.mp3', { loop: true }),
+    momVoice: makeAudio('assets/sounds/momvoice.mp3'),
+    packing: makeAudio('assets/sounds/packing.wav'),
+    upgrade1: makeAudio('assets/sounds/upgrade1.wav'),
+    upgrade2: makeAudio('assets/sounds/upgrade2.wav'),
+  };
+
+  function playOpeningMusic() {
+    playSound(sounds.opening);
   }
 
-  function detachAudioUnlockHandler() {
-    if (!audioUnlockHandlerAttached) return;
-    window.removeEventListener('pointerdown', unlockPendingSoundsOnce);
-    window.removeEventListener('keydown', unlockPendingSoundsOnce);
-    audioUnlockHandlerAttached = false;
+  function stopOpeningMusic() {
+    stopSound(sounds.opening);
   }
 
-  function unlockPendingSoundsOnce() {
-    pendingSoundRequests.forEach((_opts, key) => {
-      attemptSoundPlay(key);
-    });
-    const stillLocked = pendingSoundRequests.size > 0;
-    detachAudioUnlockHandler();
-    if (stillLocked) attachAudioUnlockHandler();
+  function startDuringMusic() {
+    playSound(sounds.during);
   }
 
-  function ensureOpeningMusic() {
-    if (!sounds.opening) return;
-    if (sounds.opening.paused) {
-      playSound('opening');
-    }
+  function stopDuringMusic() {
+    stopSound(sounds.during);
   }
 
   function playUpgradeSequence() {
-    const first = sounds.upgrade1;
-    const second = sounds.upgrade2;
-    if (!first || !second) return;
-    first.pause(); first.currentTime = 0;
-    second.pause(); second.currentTime = 0;
-    const handler = () => {
-      first.removeEventListener('ended', handler);
-      playSound('upgrade2');
-    };
-    first.addEventListener('ended', handler, { once: true });
-    playSound('upgrade1');
+    const { upgrade1, upgrade2 } = sounds;
+    if (!upgrade1 || !upgrade2) return;
+    stopSound(upgrade1);
+    stopSound(upgrade2);
+    upgrade1.addEventListener('ended', () => {
+      playSound(upgrade2);
+    }, { once: true });
+    playSound(upgrade1);
   }
 
   // Helpers
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const lerp = (a,b,t) => a + (b-a)*t;
   const easeOutCubic = (t)=>1 - Math.pow(1-t,3);
+
+  // API helpers
+  const API_BASE = (window.API_BASE || '').trim() || '/api';
+  const tokenKey = 'authToken';
+  function getToken(){ return localStorage.getItem(tokenKey) || null; }
+  function setToken(t){ if (t) localStorage.setItem(tokenKey, t); }
+  function clearToken(){ localStorage.removeItem(tokenKey); }
+  async function api(path, opts={}){
+    const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers||{});
+    const t = getToken();
+    if (t) headers['Authorization'] = `Bearer ${t}`;
+    const res = await fetch(`${API_BASE}${path}`, Object.assign({}, opts, { headers }));
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok) throw Object.assign(new Error('api_error'), { status: res.status, data });
+    return data;
+  }
+
+  async function refreshUserUI(){
+    const t = getToken();
+    if (!t) {
+      userEmailEl.textContent = '';
+      loginBtn.classList.remove('hidden');
+      logoutBtn.classList.add('hidden');
+      return;
+    }
+    try {
+      const me = await api('/auth/me').catch(() => null);
+      const email = me && me.user ? me.user.email : '';
+      userEmailEl.textContent = email;
+      loginBtn.classList.add('hidden');
+      logoutBtn.classList.remove('hidden');
+    } catch (_) {
+      clearToken();
+      userEmailEl.textContent = '';
+      loginBtn.classList.remove('hidden');
+      logoutBtn.classList.add('hidden');
+    }
+  }
 
   // Cart tier persistence
   function getTierIndex() {
@@ -264,7 +276,7 @@
       tierIdx,
       capacity: tier.capacity,
       momGap: START_DISTANCE,
-      momWarningActive: false,
+      momWarningActive: false
     };
 
     // Seed shelves
@@ -286,12 +298,13 @@
     // Danger overlay intensifies when gap <= 2
     const dangerAlpha = clamp(1 - (state.momGap / 2), 0, 1);
     dangerOverlay.style.opacity = (dangerAlpha * 0.9).toFixed(2);
-    const isWarning = state.momGap <= WARNING_DISTANCE;
-    if (isWarning && !state.momWarningActive) {
-      playSound('momvoice');
+    const inWarning = state.momGap <= WARNING_DISTANCE;
+    if (inWarning && !state.momWarningActive) {
+      playSound(sounds.momVoice);
     }
-    state.momWarningActive = isWarning;
-    if (isWarning) {
+    state.momWarningActive = inWarning;
+
+    if (inWarning) {
       speech.classList.remove('hidden');
     } else {
       speech.classList.add('hidden');
@@ -372,13 +385,15 @@
           tr.type.draw(ctx, rect, scale);
           if (p < 1) remain.push(tr);
         } else if (tr.kind === 'exit') {
-          // Follow the same shelf/camera path: recompute rect from current z
+          // Follow the shelf/camera path (world-space). Stop once behind camera.
           const z = tr.shelfZ - state.cameraZ;
+          if (z <= 0) {
+            continue; // shelf has passed the camera; drop this transient
+          }
           const dummy = { side: tr.side, level: tr.level };
           const rect = computeItemRect(z, dummy);
           const { scale } = computeShelfGeom(z);
           tr.type.draw(ctx, rect, scale);
-          // keep until off the bottom of the screen
           if (rect.y <= HEIGHT + 80) {
             remain.push(tr);
           }
@@ -403,21 +418,26 @@
     state.running = true;
     state.over = false;
     state.time = performance.now();
+    stopOpeningMusic();
+    startDuringMusic();
 
     startScreen.classList.add('hidden');
     startScreen.classList.remove('visible');
     gameOver.classList.add('hidden');
-    stopSound('opening');
-    playSound('during');
     requestAnimationFrame(tick);
   }
 
   function endGame(){
     state.running = false; state.over = true;
-    stopSound('during');
+    stopDuringMusic();
+    playOpeningMusic();
     finalScoreEl.textContent = String(state.score);
     gameOver.classList.remove('hidden');
-    ensureOpeningMusic();
+    // submit score if logged in
+    const t = getToken();
+    if (t) {
+      api('/scores', { method: 'POST', body: JSON.stringify({ score: state.score }) }).catch(()=>{});
+    }
   }
 
   function retry(){
@@ -432,9 +452,7 @@
       playUpgradeSequence();
     }
     initState();
-    ensureOpeningMusic();
-    // Keep game-over overlay visible; player can decide to restart manually.
-    gameOver.classList.remove('hidden');
+    startGame();
   }
 
   // Buttons
@@ -442,6 +460,45 @@
   retryBtn.addEventListener('click', retry);
   upgradeBtn.addEventListener('click', upgradeCart);
   resetTierBtn.addEventListener('click', () => { setTierIndex(0); initState(); });
+  // Auth controls
+  loginBtn && loginBtn.addEventListener('click', () => { authModal.classList.remove('hidden'); authMsg.textContent=''; });
+  closeAuth && closeAuth.addEventListener('click', () => { authModal.classList.add('hidden'); });
+  logoutBtn && logoutBtn.addEventListener('click', () => { clearToken(); refreshUserUI(); });
+  doLogin && doLogin.addEventListener('click', async () => {
+    authMsg.textContent = '';
+    try {
+      const out = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email: authEmail.value, password: authPassword.value }) });
+      setToken(out.token);
+      authModal.classList.add('hidden');
+      refreshUserUI();
+    } catch (e) { authMsg.textContent = e?.data?.error || '로그인 실패'; }
+  });
+  doSignup && doSignup.addEventListener('click', async () => {
+    authMsg.textContent = '';
+    try {
+      const out = await api('/auth/signup', { method: 'POST', body: JSON.stringify({ name: authName.value, email: authEmail.value, password: authPassword.value }) });
+      setToken(out.token);
+      authModal.classList.add('hidden');
+      refreshUserUI();
+    } catch (e) { authMsg.textContent = e?.data?.error || '회원가입 실패'; }
+  });
+  myScoreBtn && myScoreBtn.addEventListener('click', async () => {
+    const t = getToken();
+    if (!t) { authModal.classList.remove('hidden'); return; }
+    try {
+      const out = await api('/scores/my');
+      bestScoreEl.textContent = String(out.best || 0);
+      recentScoresEl.innerHTML = '';
+      for (const row of out.recent || []) {
+        const li = document.createElement('li');
+        const dt = new Date(row.created_at);
+        li.innerHTML = `<span>${dt.toLocaleString()}</span><strong>${row.score}</strong>`;
+        recentScoresEl.appendChild(li);
+      }
+      myScores.classList.remove('hidden');
+    } catch (_) { /* ignore */ }
+  });
+  closeScores && closeScores.addEventListener('click', () => { myScores.classList.add('hidden'); });
 
   // Click-to-pick and advance
   canvas.addEventListener('click', (e) => {
@@ -500,7 +557,7 @@
       state.speedModifier += 0.02;
       const baseScore = picked.type.score || 10;
       state.score += baseScore * (1 + Math.floor(state.combo/10));
-      playSound('packing');
+      playSound(sounds.packing);
     }
     state.momGap += 1; // gain some distance on pick
 
@@ -546,5 +603,10 @@
 
   // Bootstrap
   initState();
-  ensureOpeningMusic();
+  refreshUserUI();
+  playOpeningMusic();
+  window.addEventListener('pointerdown', () => {
+    if (!state || state.running) return;
+    if (sounds.opening && sounds.opening.paused) playOpeningMusic();
+  }, { once: true });
 })();
