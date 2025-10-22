@@ -4,22 +4,24 @@
   const HEIGHT = 1020;
 
   // Config
-  const MOM_BASE_SPEED = 0.35;
-  const KID_BASE_SPEED = 0.58;
+  const MOM_BASE_SPEED = 0.45;
+  const KID_BASE_SPEED = 0.9;
   const START_DISTANCE = 5;
   const MIN_DISTANCE = 0;
   const WARNING_DISTANCE = 2;
 
-  const CAMERA_SPEED_BASE = 0.48;
-  const CAMERA_SPEED_VOLUME_FACTOR = 0.085;
-  const CAMERA_SPEED_MIN = 0.32;
-  const CAMERA_SPEED_MAX = 1.05;
-  const CAMERA_SPEED_EASING = 0.12;
-  const CAMERA_SPEED_DECAY = 0.4;
+  const CAMERA_SPEED_BASE = 0.9;
+  const CAMERA_SPEED_VOLUME_FACTOR = 0.12;
+  const CAMERA_SPEED_MIN = 0.6;
+  const CAMERA_SPEED_MAX = 1.6;
+  const CAMERA_SPEED_EASING = 0.18;
+  const CAMERA_SPEED_DECAY = 0.55;
+  const FRIDGE_FRONT_SPEED_MULT = 1.35;
+  const FRIDGE_AUTO_SPEED_MULT = 2.1;
 
 
   // Shelf/3D config
-  const LEVELS_PER_SIDE = 3;    // left: 3 levels, right: 3 levels (total 6 slots)
+  const LEVELS_PER_SIDE = 2;    // left: 2 levels, right: 2 levels (total 4 slots)
   const SHELF_GAP = 10;          // distance between bays (world units)
   const SHELF_FLOOR_GAP = 80;
   const FOV = 400;              // pseudo perspective focal length
@@ -39,7 +41,7 @@
   const comboEl = document.getElementById('combo');
   const cartTierEl = document.getElementById('cartTier');
   const capacityEl = document.getElementById('capacity');
-  const gapFillEl = document.getElementById('gapFill');
+  const gameGaugeFillEl = document.getElementById('gameGaugeFill');
   const gapTextEl = document.getElementById('gapText');
   const startScreen = document.getElementById('startScreen');
   const gameOver = document.getElementById('gameOver');
@@ -265,7 +267,52 @@
     const size = ITEM_BASE_SIZE * scale;
     const x = sx - size / 2;
     const y = yBoard - 10 * scale;
-    return { x, y, w: size, h: size };
+    let rect = { x, y, w: size, h: size };
+
+    if (state && state.shelves && state.shelfIndex != null) {
+      const frontShelf = state.shelves[state.shelfIndex];
+      if (frontShelf && state.furniture && state.furniture.length) {
+        const frontZ = frontShelf.z - state.cameraZ;
+        const deltaZ = Math.abs(frontZ - shelfZ);
+        const alignRange = 6;
+        const alignT = clamp(1 - deltaZ / alignRange, 0, 1);
+        if (alignT > 0 && currentFrontFurnitureType() === 'bookshelf') {
+          const frontLayer = state.furniture[0];
+          const placement = computeFurniturePlacement(frontLayer);
+          if (placement) {
+            const baseRect = item.side === 'L' ? placement.left : placement.right;
+            if (baseRect) {
+              if (item.level >= 2) return null;
+              const edgeRatio = BOX_EDGE_OFFSET_RATIO;
+              const floorRatios = BOX_FLOOR_OFFSET_RATIOS;
+              const floorRatio = floorRatios[item.level] != null ? floorRatios[item.level] : floorRatios[0];
+              const targetSize = ITEM_BASE_SIZE * scale;
+              const floorY = baseRect.y + baseRect.h;
+              const desiredX = item.side === 'L'
+                  ? (baseRect.x + baseRect.w * edgeRatio)
+                  : (baseRect.x + baseRect.w - baseRect.w * edgeRatio - targetSize);
+              const clampedX = clamp(desiredX, baseRect.x, baseRect.x + baseRect.w - targetSize);
+              const desiredY = floorY - targetSize - baseRect.h * floorRatio;
+              const clampedY = clamp(desiredY, baseRect.y, floorY - targetSize);
+              const targetRect = {
+                x: clampedX,
+                y: clampedY,
+                w: targetSize,
+                h: targetSize,
+              };
+              rect = {
+                x: lerp(rect.x, targetRect.x, alignT),
+                y: lerp(rect.y, targetRect.y, alignT),
+                w: lerp(rect.w, targetRect.w, alignT),
+                h: lerp(rect.h, targetRect.h, alignT),
+              };
+            }
+          }
+        }
+      }
+    }
+
+    return rect;
   }
 
   // Item OOP model
@@ -289,6 +336,7 @@
     }
     draw(ctx, z){
       const rect = computeItemRect(z, this);
+      if (!rect) return;
       const { scale } = computeShelfGeom(z);
       this.type.draw(ctx, rect, scale);
     }
@@ -321,6 +369,11 @@
     bookshelf: { width: 129, height: 290, fill: '#b0793a', stroke: '#70421c', highlight: 'rgba(255,230,180,0.24)' },
     fridge:    { width: 112, height: 302, fill: '#e4ecf6', stroke: '#9aa9ba', highlight: 'rgba(255,255,255,0.28)' },
   };
+  const BOX_EDGE_OFFSET_RATIO = 57 / FURNITURE_CANONICAL.width;
+  const BOX_FLOOR_OFFSET_RATIOS = [
+    120 / FURNITURE_CANONICAL.height,
+    241 / FURNITURE_CANONICAL.height,
+  ];
   const FURNITURE_PROFILES = {
     bookshelf: [
       { y: 0, width: 129, height: 290, edge: 0 },
@@ -371,6 +424,11 @@
       height: Math.max(12, last.height + (last.height - before.height) * t),
       edge: Math.max(0, last.edge + (last.edge - before.edge) * t),
     };
+  }
+
+  function currentFrontFurnitureType(){
+    if (!state || !state.furniture || !state.furniture.length) return 'bookshelf';
+    return state.furniture[0].type || 'bookshelf';
   }
 
   function computeFurniturePlacement(layer) {
@@ -579,8 +637,11 @@
     // Show only cart capacity (size limit)
     capacityEl.textContent = `${state.capacity}`;
     const maxGap = 12; // for bar scaling only
-    const p = clamp(state.momGap / maxGap, 0, 1);
-    gapFillEl.style.width = `${Math.round(p * 100)}%`;
+    const gapRatio = clamp(state.momGap / maxGap, 0, 1);
+    const fillRatio = 1 - gapRatio;
+    if (gameGaugeFillEl) {
+      gameGaugeFillEl.style.width = `${Math.round(fillRatio * 100)}%`;
+    }
     gapTextEl.textContent = String(Math.max(0, Math.ceil(state.momGap)));
     // Danger overlay intensifies when gap <= 2
     const dangerAlpha = clamp(1 - (state.momGap / 2), 0, 1);
@@ -631,6 +692,9 @@
     const cx = WIDTH/2;
     const cy = HEIGHT * 0.65; // horizon-ish baseline
 
+    const frontFurnitureType = currentFrontFurnitureType();
+    const canDrawShelfItems = frontFurnitureType !== 'fridge';
+
     // ground fade
     const grd = ctx.createLinearGradient(0, cy-200, 0, HEIGHT);
     grd.addColorStop(0, 'rgba(255,255,255,0.04)');
@@ -645,6 +709,7 @@
       const z = shelf.z - state.cameraZ;
       if (z < -0.001) continue;
       const { scale } = computeShelfGeom(z);
+      const isFrontShelf = i === state.shelfIndex;
 
       // Compute left/right shelf rectangles (endless feel)
       // geometry computed in computeShelfGeom
@@ -654,9 +719,11 @@
       ctx.lineWidth = Math.max(1, 2*scale);
 
       // items per level and side
-      for (const it of shelf.items) {
-        if (it.collected) continue;
-        it.draw(ctx, z);
+      if (canDrawShelfItems && isFrontShelf) {
+        for (const it of shelf.items) {
+          if (it.collected) continue;
+          it.draw(ctx, z);
+        }
       }
     }
 
@@ -685,6 +752,7 @@
           }
           const dummy = { side: tr.side, level: tr.level };
           const rect = computeItemRect(z, dummy);
+          if (!rect) continue;
           const { scale } = computeShelfGeom(z);
           tr.type.draw(ctx, rect, scale);
           if (rect.y <= HEIGHT + 80) {
@@ -796,6 +864,7 @@
   // Click-to-pick and advance
   canvas.addEventListener('click', (e) => {
     if (!state || state.over) return;
+    if (currentFrontFurnitureType() === 'fridge') return;
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
@@ -813,6 +882,10 @@
     for (const it of shelf.items) {
       if (it.collected) continue;
       const r = computeItemRect(z, it);
+      if (!r) {
+        it.collected = true;
+        continue;
+      }
       if (it === picked) {
         const endSize = Math.max(targetSize, r.w);
         state.transients.push({
@@ -865,6 +938,7 @@
   });
 
   function pickItemUnderCursor(x, y){
+    if (currentFrontFurnitureType() === 'fridge') return null;
     const shelf = state.shelves[state.shelfIndex];
     if (!shelf) return null;
     const z = shelf.z - state.cameraZ;
@@ -872,6 +946,7 @@
     for (const it of shelf.items) {
       if (it.collected) continue;
       const r = computeItemRect(z, it);
+      if (!r) continue;
       if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
         return it;
       }
@@ -879,26 +954,38 @@
     return null;
   }
 
-  function tweenToNextShelf(){
+  function tweenToNextShelf({ auto = false, speedMultiplier = null } = {}){
     const startZ = state.cameraZ;
     const endZ = (state.shelfIndex+1) * SHELF_GAP;
     const t0 = performance.now();
-    const speed = clamp(state.speedModifier, CAMERA_SPEED_MIN, CAMERA_SPEED_MAX);
     prepareFurnitureAdvance(state);
+    const frontType = currentFrontFurnitureType();
+    const baseSpeed = clamp(state.speedModifier, CAMERA_SPEED_MIN, CAMERA_SPEED_MAX);
+    const typeMultiplier = frontType === 'fridge' ? FRIDGE_FRONT_SPEED_MULT : 1;
+    const effectiveSpeed = baseSpeed * (speedMultiplier || 1) * typeMultiplier;
+    const tweenSpeed = Math.max(CAMERA_SPEED_MIN, Math.min(CAMERA_SPEED_MAX * 2, effectiveSpeed));
     function step(t){
       if (!state.running) return;
-      const p = Math.min(1, (t - t0) * KID_BASE_SPEED * speed * 0.001);
-      const eased = easeOutCubic(p);
-      state.cameraZ = lerp(startZ, endZ, eased);
-      applyFurnitureTween(state, eased);
-      drawScene(0);
-      if (p < 1) requestAnimationFrame(step);
-      else {
+      const p = Math.min(1, (t - t0) * KID_BASE_SPEED * tweenSpeed * 0.001);
+      const progress = p;
+      state.cameraZ = lerp(startZ, endZ, progress);
+      applyFurnitureTween(state, progress);
+      if (p >= 1) {
         state.shelfIndex++;
         ensureShelfAhead();
+        applyFurnitureTween(state, 1);
+        const nextFront = currentFrontFurnitureType();
+        if (nextFront === 'fridge' && state.running) {
+          tweenToNextShelf({ auto: true, speedMultiplier: FRIDGE_AUTO_SPEED_MULT });
+          return;
+        }
+        drawScene(0);
+        return;
       }
+      drawScene(0);
+      requestAnimationFrame(step);
     }
-    requestAnimationFrame(step);
+    step(performance.now());
   }
 
   // Bootstrap

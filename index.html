@@ -16,9 +16,6 @@
           <div class="hud-item"><span>적재</span><strong id="capacity">0</strong></div>
         </div>
         <div class="hud-right">
-          <div class="gap-bar">
-            <div class="gap-fill" id="gapFill"></div>
-          </div>
           <div class="gap-label">엄마와 거리: <strong id="gapText">5</strong></div>
           <div class="auth-controls">
             <span id="userEmail" class="muted"></span>
@@ -31,6 +28,20 @@
 
       <div id="game" class="danger-0">
         <canvas id="canvas" width="800" height="1020"></canvas>
+        <div id="gameGauge" class="game-gauge">
+          <div class="gauge-layer gauge-blank">
+            <span class="segment left"></span>
+            <span class="segment mid"></span>
+            <span class="segment right"></span>
+          </div>
+          <div class="gauge-layer gauge-fill" id="gameGaugeFill">
+            <div class="gauge-fill-content">
+              <span class="segment left"></span>
+              <span class="segment mid"></span>
+              <span class="segment right"></span>
+            </div>
+          </div>
+        </div>
         <div id="speech" class="hidden">
           <div class="bubble">거기 서! 그거 당장 빼! 💢</div>
         </div>
