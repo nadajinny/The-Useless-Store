@@ -282,11 +282,11 @@
             const baseRect = item.side === 'L' ? placement.left : placement.right;
             if (baseRect) {
               if (item.level >= 2) return null;
-              const targetSize = ITEM_BASE_SIZE * scale;
+              const targetSize = ITEM_BASE_SIZE * scale * 2.5;
               const scaleX = baseRect.w / FURNITURE_CANONICAL.width;
               const scaleY = baseRect.h / FURNITURE_CANONICAL.height;
-              const edgePx = 57 * scaleX;
-              const floorPx = (item.level === 0 ? 120 : 241) * scaleY;
+              const edgePx = BOX_EDGE_PX * scaleX;
+              const floorPx = (BOX_FLOOR_PX[item.level] != null ? BOX_FLOOR_PX[item.level] : BOX_FLOOR_PX[0]) * scaleY;
               const floorY = baseRect.y + baseRect.h;
               const desiredX = item.side === 'L'
                 ? baseRect.x + edgePx
@@ -310,10 +310,27 @@
   // Item OOP model
   class ItemType {
     constructor(key, { score, volume, color = '#8be9fd', image = null } = {}){
-      this.key = key; this.score = score; this.volume = volume; this.color = color; this.image = image;
+      this.key = key; this.score = score; this.volume = volume; this.color = color; this.imagePath = image;
+      this.image = null; this.imageLoaded = false; this.imageError = false;
+      if (this.imagePath) this.loadImage();
+    }
+    loadImage(){
+      if (!this.imagePath || this.image) return;
+      const img = new Image();
+      img.onload = () => { this.imageLoaded = true; };
+      img.onerror = () => { this.imageError = true; };
+      img.src = this.imagePath;
+      this.image = img;
     }
     draw(ctx, rect, scale){
-      // Placeholder: draw colored square matching clickable area
+      if (this.imagePath && (!this.image || (!this.imageLoaded && !this.imageError))) {
+        this.loadImage();
+      }
+      if (this.image && this.imageLoaded) {
+        ctx.drawImage(this.image, rect.x, rect.y, rect.w, rect.h);
+        return;
+      }
+      // Fallback: draw colored square matching clickable area
       ctx.fillStyle = this.color;
       ctx.strokeStyle = 'rgba(0,0,0,0.25)';
       ctx.lineWidth = Math.max(1, 1.5 * scale);
@@ -336,15 +353,15 @@
 
   // Item type registry
   const ITEM_TYPES = {
-    apple:   new ItemType('apple',   { score: 10, volume: 1, color: '#8be9fd' }),
-    snack:   new ItemType('snack',   { score: 10, volume: 1, color: '#fa77a4' }),
-    shampoo: new ItemType('shampoo', { score: 12, volume: 2, color: '#9060ff' }),
-    grapes:  new ItemType('grapes',  { score: 12, volume: 2, color: '#7cff70' }),
-    toaster: new ItemType('toaster', { score: 18, volume: 3, color: '#a7b0bd' }),
-    speaker: new ItemType('speaker', { score: 22, volume: 3, color: '#50fa7b' }),
-    tv:      new ItemType('tv',      { score: 35, volume: 4, color: '#ffd36b' }),
-    fridge:  new ItemType('fridge',  { score: 45, volume: 4, color: '#cfd9e6' }),
-    washing: new ItemType('washing', { score: 40, volume: 5, color: '#59a7ff' }),
+    apple_bundle: new ItemType('apple_bundle', { score: 10, volume: 1, color: '#ff6b6b', image: 'assets/images/apple_bundle.png' }),
+    apple:        new ItemType('apple',        { score: 9,  volume: 1, color: '#ff9b40', image: 'assets/images/apple.png' }),
+    can_bundle:   new ItemType('can_bundle',   { score: 12, volume: 2, color: '#59a7ff', image: 'assets/images/can_bundle.png' }),
+    can_set:      new ItemType('can_set',      { score: 14, volume: 2, color: '#50fa7b', image: 'assets/images/can_set.png' }),
+    can:          new ItemType('can',          { score: 11, volume: 1, color: '#8be9fd', image: 'assets/images/can.png' }),
+    snack_set:    new ItemType('snack_set',    { score: 13, volume: 2, color: '#fa77a4', image: 'assets/images/snack_set.png' }),
+    snack:        new ItemType('snack',        { score: 9,  volume: 1, color: '#ffd36b', image: 'assets/images/snack.png' }),
+    water_bundle: new ItemType('water_bundle', { score: 10, volume: 2, color: '#59a7ff', image: 'assets/images/water_bundle.png' }),
+    water:        new ItemType('water',        { score: 8,  volume: 1, color: '#9060ff', image: 'assets/images/water.png' }),
   };
 
   function randomItemType(){
@@ -362,10 +379,8 @@
     fridge:    { width: 112, height: 302, fill: '#e4ecf6', stroke: '#9aa9ba', highlight: 'rgba(255,255,255,0.28)' },
   };
   const BOX_EDGE_OFFSET_RATIO = 57 / FURNITURE_CANONICAL.width;
-  const BOX_FLOOR_OFFSET_RATIOS = [
-    120 / FURNITURE_CANONICAL.height,
-    241 / FURNITURE_CANONICAL.height,
-  ];
+  const BOX_EDGE_PX = 130;
+  const BOX_FLOOR_PX = [160, 360];
   const CART_IMAGES = {
     center: 'assets/images/cart.png',
     left: 'assets/images/cart_left.png',
