@@ -1,14 +1,21 @@
 (() => {
-  // Canvas size (matches index.html)
+  // Canvas size (matches index.html, background aspect 1811x2308)
   const WIDTH = 800;
-  const HEIGHT = 600;
+  const HEIGHT = 1020;
 
   // Config
-  const MOM_BASE_SPEED = 1;
-  const KID_BASE_SPEED = 1;
+  const MOM_BASE_SPEED = 0.35;
+  const KID_BASE_SPEED = 0.58;
   const START_DISTANCE = 5;
   const MIN_DISTANCE = 0;
   const WARNING_DISTANCE = 2;
+
+  const CAMERA_SPEED_BASE = 0.48;
+  const CAMERA_SPEED_VOLUME_FACTOR = 0.085;
+  const CAMERA_SPEED_MIN = 0.32;
+  const CAMERA_SPEED_MAX = 1.05;
+  const CAMERA_SPEED_EASING = 0.12;
+  const CAMERA_SPEED_DECAY = 0.4;
 
 
   // Shelf/3D config
@@ -127,6 +134,62 @@
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const lerp = (a,b,t) => a + (b-a)*t;
   const easeOutCubic = (t)=>1 - Math.pow(1-t,3);
+
+  function drawRoundedRectPath(ctx, x, y, w, h, r){
+    const radius = Math.max(0, Math.min(r, Math.min(w, h) / 2));
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + w - radius, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+    ctx.lineTo(x + w, y + h - radius);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+    ctx.lineTo(x + radius, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
+  }
+
+  const FURNITURE_IMAGE_PATHS = {
+    bookshelf: {
+      left: 'assets/images/bookshelf_left.png',
+      right: 'assets/images/bookshelf_right.png',
+    },
+    fridge: {
+      left: 'assets/images/refrigerator_left.png',
+      right: 'assets/images/refrigerator_right.png',
+    },
+  };
+  let furnitureImages = null;
+  let furnitureImagesReady = false;
+
+  function loadImage(path){
+    return new Promise((resolve) => {
+      if (typeof Image === 'undefined') {
+        resolve(null);
+        return;
+      }
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = path;
+    });
+  }
+
+  async function ensureFurnitureImages(){
+    if (furnitureImages) return furnitureImages;
+    const [bookshelfLeft, bookshelfRight, fridgeLeft, fridgeRight] = await Promise.all([
+      loadImage(FURNITURE_IMAGE_PATHS.bookshelf.left),
+      loadImage(FURNITURE_IMAGE_PATHS.bookshelf.right),
+      loadImage(FURNITURE_IMAGE_PATHS.fridge.left),
+      loadImage(FURNITURE_IMAGE_PATHS.fridge.right),
+    ]);
+    furnitureImages = {
+      bookshelf: { left: bookshelfLeft, right: bookshelfRight },
+      fridge: { left: fridgeLeft, right: fridgeRight },
+    };
+    return furnitureImages;
+  }
 
   // API helpers
   const API_BASE = (window.API_BASE || '').trim() || '/api';
@@ -249,6 +312,222 @@
     return ITEM_TYPES[pick(keys)];
   }
 
+  // Furniture perspective setup for alternating bookshelf/fridge pairs
+  const FURNITURE_CANONICAL = { width: 339, height: 432 };
+  const FURNITURE_SCALE = WIDTH / FURNITURE_CANONICAL.width;
+  const FURNITURE_ORDER = ['bookshelf', 'fridge'];
+  const FURNITURE_LAYER_TARGET = 4;
+  const FURNITURE_BASE = {
+    bookshelf: { width: 129, height: 290, fill: '#b0793a', stroke: '#70421c', highlight: 'rgba(255,230,180,0.24)' },
+    fridge:    { width: 112, height: 302, fill: '#e4ecf6', stroke: '#9aa9ba', highlight: 'rgba(255,255,255,0.28)' },
+  };
+  const FURNITURE_PROFILES = {
+    bookshelf: [
+      { y: 0, width: 129, height: 290, edge: 0 },
+      { y: 89, width: 87, height: 197, edge: 52 },
+      { y: 177, width: 48, height: 106, edge: 105 },
+      { y: 221, width: 27, height: 60, edge: 131 },
+    ],
+    fridge: [
+      { y: 0, width: 112, height: 302, edge: 0 },
+      { y: 155, width: 50, height: 136, edge: 93 },
+      { y: 194, width: 34, height: 92, edge: 115 },
+      { y: 236, width: 17, height: 45, edge: 141 },
+    ],
+  };
+
+  const FURNITURE_MAX_PROFILE_Y = Math.max(
+    ...Object.values(FURNITURE_PROFILES).flat().map((p) => p.y)
+  );
+
+  function sampleFurnitureProfile(type, y) {
+    const records = FURNITURE_PROFILES[type];
+    if (!records || !records.length) return null;
+    if (y <= records[0].y) {
+      const front = records[0];
+      return { y, width: front.width, height: front.height, edge: front.edge };
+    }
+    for (let i = 1; i < records.length; i++) {
+      const prev = records[i - 1];
+      const next = records[i];
+      if (y <= next.y) {
+        const span = Math.max(1, next.y - prev.y);
+        const t = clamp((y - prev.y) / span, 0, 1);
+        return {
+          y,
+          width: lerp(prev.width, next.width, t),
+          height: lerp(prev.height, next.height, t),
+          edge: lerp(prev.edge, next.edge, t),
+        };
+      }
+    }
+    const last = records[records.length - 1];
+    const before = records[records.length - 2] || last;
+    const span = Math.max(1, last.y - before.y);
+    const t = (y - last.y) / span;
+    return {
+      y,
+      width: Math.max(6, last.width + (last.width - before.width) * t),
+      height: Math.max(12, last.height + (last.height - before.height) * t),
+      edge: Math.max(0, last.edge + (last.edge - before.edge) * t),
+    };
+  }
+
+  function computeFurniturePlacement(layer) {
+    const sample = sampleFurnitureProfile(layer.type, layer.y);
+    const base = FURNITURE_BASE[layer.type];
+    if (!sample || !base) return null;
+    const width = sample.width * FURNITURE_SCALE;
+    const height = sample.height * FURNITURE_SCALE;
+    if (width <= 0.1 || height <= 0.1) return null;
+    const bottomY = HEIGHT - sample.y * FURNITURE_SCALE;
+    const topY = bottomY - height;
+    const scale = width / (base.width * FURNITURE_SCALE);
+    const edgeOffset = sample.edge * FURNITURE_SCALE;
+    return {
+      scale: clamp(scale, 0.05, 1.1),
+      base,
+      left: { x: edgeOffset, y: topY, w: width, h: height },
+      right: { x: WIDTH - edgeOffset - width, y: topY, w: width, h: height },
+    };
+  }
+
+  function renderFurnitureRect(ctx, rect, base, type, scale, side) {
+    const radius = Math.max(6, 12 * scale);
+    const fill = base.fill || '#555';
+    const stroke = base.stroke || '#222';
+    const highlight = base.highlight || 'rgba(255,255,255,0.12)';
+    const sheet = furnitureImages && furnitureImages[type];
+    const img = sheet && side ? sheet[side] : null;
+    const hasImage = furnitureImagesReady && img;
+
+    if (hasImage) {
+      ctx.save();
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(img, rect.x, rect.y, rect.w, rect.h);
+      ctx.restore();
+    } else {
+      ctx.save();
+      ctx.fillStyle = fill;
+      ctx.strokeStyle = stroke;
+      drawRoundedRectPath(ctx, rect.x, rect.y, rect.w, rect.h, radius);
+      ctx.fill();
+      ctx.lineWidth = Math.max(1, 1.4 * scale);
+      ctx.stroke();
+
+      ctx.strokeStyle = highlight;
+      ctx.lineWidth = Math.max(0.5, 0.9 * scale);
+      const innerX = rect.x + radius * 0.15;
+      const innerY = rect.y + radius * 0.15;
+      const innerW = Math.max(rect.w - radius * 0.3, 4);
+      const innerH = Math.max(rect.h - radius * 0.3, 4);
+      drawRoundedRectPath(ctx, innerX, innerY, innerW, innerH, Math.max(2, radius * 0.6));
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.save();
+      ctx.lineWidth = Math.max(0.8, scale);
+      if (type === 'fridge') {
+        ctx.strokeStyle = 'rgba(40,48,64,0.35)';
+        const midY = rect.y + rect.h * 0.55;
+        ctx.beginPath();
+        ctx.moveTo(rect.x + 4, midY);
+        ctx.lineTo(rect.x + rect.w - 4, midY);
+        ctx.stroke();
+        ctx.lineWidth = Math.max(1, 1.2 * scale);
+        const handleX = rect.x + rect.w * 0.82;
+        ctx.beginPath();
+        ctx.moveTo(handleX, rect.y + rect.h * 0.2);
+        ctx.lineTo(handleX, rect.y + rect.h * 0.45);
+        ctx.stroke();
+      } else if (type === 'bookshelf') {
+        ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+        const shelfCount = 4;
+        for (let i = 1; i < shelfCount; i++) {
+          const y = rect.y + (rect.h * i) / shelfCount;
+          ctx.beginPath();
+          ctx.moveTo(rect.x + rect.w * 0.08, y);
+          ctx.lineTo(rect.x + rect.w * 0.92, y);
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+  }
+
+  function drawFurnitureBackdrop(ctx) {
+    if (!state || !state.furniture || !state.furniture.length) return;
+    ctx.save();
+    ctx.lineJoin = 'round';
+    for (let i = state.furniture.length - 1; i >= 0; i--) {
+      const layer = state.furniture[i];
+      const placement = computeFurniturePlacement(layer);
+      if (!placement) continue;
+      renderFurnitureRect(ctx, placement.left, placement.base, layer.type, placement.scale, 'left');
+      renderFurnitureRect(ctx, placement.right, placement.base, layer.type, placement.scale, 'right');
+    }
+    ctx.restore();
+  }
+
+  function initFurnitureQueue() {
+    const slots = [];
+    let nextIndex = 0;
+    for (let i = 0; i < FURNITURE_LAYER_TARGET; i++) {
+      const type = FURNITURE_ORDER[nextIndex];
+      const profile = FURNITURE_PROFILES[type];
+      const sample = profile ? profile[Math.min(i, profile.length - 1)] : null;
+      slots.push({
+        type,
+        y: sample ? sample.y : 0,
+      });
+      nextIndex = (nextIndex + 1) % FURNITURE_ORDER.length;
+    }
+    return { slots, nextIndex };
+  }
+
+  function prepareFurnitureAdvance(targetState) {
+    if (!targetState || !targetState.furniture || !targetState.furniture.length) return;
+    const currentSlots = targetState.furniture;
+    const startY = currentSlots.map((slot) => slot.y);
+    const nextSlots = currentSlots.slice(1);
+    const addType = FURNITURE_ORDER[targetState.furnitureNextIndex];
+    targetState.furnitureNextIndex = (targetState.furnitureNextIndex + 1) % FURNITURE_ORDER.length;
+    const addProfile = FURNITURE_PROFILES[addType];
+    const addInfo = addProfile ? (addProfile[FURNITURE_LAYER_TARGET - 1] || addProfile[addProfile.length - 1]) : { y: FURNITURE_MAX_PROFILE_Y };
+    nextSlots.push({ type: addType, y: addInfo.y });
+    const targetY = nextSlots.map((slot, idx) => {
+      const profile = FURNITURE_PROFILES[slot.type];
+      const info = profile ? (profile[idx] || profile[profile.length - 1]) : { y: 0 };
+      return info.y;
+    });
+    const start = nextSlots.map((slot, idx) => {
+      if (idx < startY.length - 1) return startY[idx + 1];
+      return slot.y;
+    });
+    targetState.furnitureTween = { start, target: targetY };
+    for (let i = 0; i < nextSlots.length; i++) {
+      nextSlots[i].y = start[i];
+    }
+    targetState.furniture = nextSlots;
+  }
+
+  function applyFurnitureTween(targetState, progress) {
+    if (!targetState || !targetState.furnitureTween) return;
+    const tween = targetState.furnitureTween;
+    const slots = targetState.furniture;
+    for (let i = 0; i < slots.length; i++) {
+      const start = tween.start[i];
+      const end = tween.target[i];
+      slots[i].y = lerp(start, end, progress);
+    }
+    if (progress >= 1) {
+      for (let i = 0; i < slots.length; i++) {
+        slots[i].y = tween.target[i];
+      }
+      targetState.furnitureTween = null;
+    }
+  }
+
   // Game state
   let state = null;
 
@@ -268,16 +547,24 @@
       cameraZ: 0,
       shelfIndex: 0,
       transients: [],     // transient item animations during transition
+      furniture: [],
+      furnitureNextIndex: 0,
       // scoring/capacity
       score: 0,
       combo: 0,
-      speedModifier: 1,
+      speedModifier: CAMERA_SPEED_BASE,
+      speedTarget: CAMERA_SPEED_BASE,
       usedCapacity: 0,
       tierIdx,
       capacity: tier.capacity,
       momGap: START_DISTANCE,
       momWarningActive: false
     };
+
+    const furnitureInit = initFurnitureQueue();
+    state.furniture = furnitureInit.slots;
+    state.furnitureNextIndex = furnitureInit.nextIndex;
+    state.furnitureTween = null;
 
     // Seed shelves
     state.shelves = [makeShelf(0), makeShelf(1)];
@@ -329,6 +616,10 @@
 
   function update(dtMs){
     const dt = dtMs / 1000;
+    state.speedTarget = Math.max(CAMERA_SPEED_BASE, state.speedTarget - CAMERA_SPEED_DECAY * dt);
+    const desiredSpeed = clamp(state.speedTarget, CAMERA_SPEED_MIN, CAMERA_SPEED_MAX);
+    const lerpFactor = clamp(dt * 60 * CAMERA_SPEED_EASING, 0, 1);
+    state.speedModifier = lerp(state.speedModifier, desiredSpeed, lerpFactor);
     state.momGap -= MOM_BASE_SPEED * dt;
     state.momGap = Math.max(MIN_DISTANCE - 0.0001, state.momGap);
     updateHUD();
@@ -345,6 +636,8 @@
     grd.addColorStop(0, 'rgba(255,255,255,0.04)');
     grd.addColorStop(1, 'rgba(255,255,255,0.00)');
     ctx.fillStyle = grd; ctx.fillRect(0, cy-200, WIDTH, HEIGHT-(cy-200));
+
+    drawFurnitureBackdrop(ctx);
 
     // visible bays
     for (let i = state.shelfIndex; i < state.shelves.length; i++) {
@@ -546,7 +839,8 @@
     const vol = picked.type.volume;
     if (vol > state.capacity) {
       state.combo = 0;
-      state.speedModifier = 1;
+      state.speedModifier = CAMERA_SPEED_BASE;
+      state.speedTarget = CAMERA_SPEED_BASE;
       const baseScore = -5;
       state.score += baseScore * (1 + Math.floor(state.combo/10));
       // too big: ignore pick (no collection)
@@ -554,7 +848,9 @@
     else {
       picked.collected = true;
       state.combo += 1;
-      state.speedModifier += 0.02;
+      const volumeBoost = picked.type?.volume || 1;
+      const target = CAMERA_SPEED_BASE + volumeBoost * CAMERA_SPEED_VOLUME_FACTOR;
+      state.speedTarget = clamp(target, CAMERA_SPEED_MIN, CAMERA_SPEED_MAX);
       const baseScore = picked.type.score || 10;
       state.score += baseScore * (1 + Math.floor(state.combo/10));
       playSound(sounds.packing);
@@ -587,10 +883,14 @@
     const startZ = state.cameraZ;
     const endZ = (state.shelfIndex+1) * SHELF_GAP;
     const t0 = performance.now();
+    const speed = clamp(state.speedModifier, CAMERA_SPEED_MIN, CAMERA_SPEED_MAX);
+    prepareFurnitureAdvance(state);
     function step(t){
       if (!state.running) return;
-      const p = Math.min(1, (t - t0) * KID_BASE_SPEED * state.speedModifier * 0.001);
-      state.cameraZ = lerp(startZ, endZ, easeOutCubic(p));
+      const p = Math.min(1, (t - t0) * KID_BASE_SPEED * speed * 0.001);
+      const eased = easeOutCubic(p);
+      state.cameraZ = lerp(startZ, endZ, eased);
+      applyFurnitureTween(state, eased);
       drawScene(0);
       if (p < 1) requestAnimationFrame(step);
       else {
@@ -602,11 +902,16 @@
   }
 
   // Bootstrap
-  initState();
-  refreshUserUI();
-  playOpeningMusic();
-  window.addEventListener('pointerdown', () => {
-    if (!state || state.running) return;
-    if (sounds.opening && sounds.opening.paused) playOpeningMusic();
-  }, { once: true });
+  ensureFurnitureImages()
+    .catch(() => null)
+    .finally(() => {
+      furnitureImagesReady = true;
+      initState();
+      refreshUserUI();
+      playOpeningMusic();
+      window.addEventListener('pointerdown', () => {
+        if (!state || state.running) return;
+        if (sounds.opening && sounds.opening.paused) playOpeningMusic();
+      }, { once: true });
+    });
 })();
