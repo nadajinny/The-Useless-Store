@@ -42,6 +42,9 @@
   const cartTierEl = document.getElementById('cartTier');
   const capacityEl = document.getElementById('capacity');
   const gameGaugeFillEl = document.getElementById('gameGaugeFill');
+  const characterLayer = document.querySelector('.character-layer');
+  const cartImg = characterLayer ? characterLayer.querySelector('.cart') : null;
+  const personImg = characterLayer ? characterLayer.querySelector('.person') : null;
   const gapTextEl = document.getElementById('gapText');
   const startScreen = document.getElementById('startScreen');
   const gameOver = document.getElementById('gameOver');
@@ -271,40 +274,29 @@
 
     if (state && state.shelves && state.shelfIndex != null) {
       const frontShelf = state.shelves[state.shelfIndex];
-      if (frontShelf && state.furniture && state.furniture.length) {
-        const frontZ = frontShelf.z - state.cameraZ;
-        const deltaZ = Math.abs(frontZ - shelfZ);
-        const alignRange = 6;
-        const alignT = clamp(1 - deltaZ / alignRange, 0, 1);
-        if (alignT > 0 && currentFrontFurnitureType() === 'bookshelf') {
+      if (frontShelf && frontShelf.items && frontShelf.items.includes(item)) {
+        if (state.furniture && state.furniture.length && currentFrontFurnitureType() === 'bookshelf') {
           const frontLayer = state.furniture[0];
           const placement = computeFurniturePlacement(frontLayer);
           if (placement) {
             const baseRect = item.side === 'L' ? placement.left : placement.right;
             if (baseRect) {
               if (item.level >= 2) return null;
-              const edgeRatio = BOX_EDGE_OFFSET_RATIO;
-              const floorRatios = BOX_FLOOR_OFFSET_RATIOS;
-              const floorRatio = floorRatios[item.level] != null ? floorRatios[item.level] : floorRatios[0];
               const targetSize = ITEM_BASE_SIZE * scale;
+              const scaleX = baseRect.w / FURNITURE_CANONICAL.width;
+              const scaleY = baseRect.h / FURNITURE_CANONICAL.height;
+              const edgePx = 57 * scaleX;
+              const floorPx = (item.level === 0 ? 120 : 241) * scaleY;
               const floorY = baseRect.y + baseRect.h;
               const desiredX = item.side === 'L'
-                  ? (baseRect.x + baseRect.w * edgeRatio)
-                  : (baseRect.x + baseRect.w - baseRect.w * edgeRatio - targetSize);
-              const clampedX = clamp(desiredX, baseRect.x, baseRect.x + baseRect.w - targetSize);
-              const desiredY = floorY - targetSize - baseRect.h * floorRatio;
-              const clampedY = clamp(desiredY, baseRect.y, floorY - targetSize);
-              const targetRect = {
-                x: clampedX,
-                y: clampedY,
+                ? baseRect.x + edgePx
+                : baseRect.x + baseRect.w - edgePx - targetSize;
+              const desiredY = floorY - targetSize - floorPx;
+              rect = {
+                x: clamp(desiredX, baseRect.x, baseRect.x + baseRect.w - targetSize),
+                y: clamp(desiredY, baseRect.y, floorY - targetSize),
                 w: targetSize,
                 h: targetSize,
-              };
-              rect = {
-                x: lerp(rect.x, targetRect.x, alignT),
-                y: lerp(rect.y, targetRect.y, alignT),
-                w: lerp(rect.w, targetRect.w, alignT),
-                h: lerp(rect.h, targetRect.h, alignT),
               };
             }
           }
@@ -374,6 +366,16 @@
     120 / FURNITURE_CANONICAL.height,
     241 / FURNITURE_CANONICAL.height,
   ];
+  const CART_IMAGES = {
+    center: 'assets/images/cart.png',
+    left: 'assets/images/cart_left.png',
+    right: 'assets/images/cart_right.png',
+  };
+  const PERSON_IMAGES = {
+    center: 'assets/images/person_front.png',
+    left: 'assets/images/person_left.png',
+    right: 'assets/images/person_right.png',
+  };
   const FURNITURE_PROFILES = {
     bookshelf: [
       { y: 0, width: 129, height: 290, edge: 0 },
@@ -588,6 +590,7 @@
 
   // Game state
   let state = null;
+  let cartPoseTimer = null;
 
   function initState() {
     const tierIdx = getTierIndex();
@@ -624,6 +627,9 @@
     state.furnitureNextIndex = furnitureInit.nextIndex;
     state.furnitureTween = null;
 
+    characterLayer && characterLayer.classList.remove('visible');
+    resetCartPose();
+
     // Seed shelves
     state.shelves = [makeShelf(0), makeShelf(1)];
     ensureShelfAhead();
@@ -638,9 +644,16 @@
     capacityEl.textContent = `${state.capacity}`;
     const maxGap = 12; // for bar scaling only
     const gapRatio = clamp(state.momGap / maxGap, 0, 1);
-    const fillRatio = 1 - gapRatio;
+    const fillRatio = clamp((START_DISTANCE - state.momGap) / Math.max(START_DISTANCE, 0.0001), 0, 1);
     if (gameGaugeFillEl) {
-      gameGaugeFillEl.style.width = `${Math.round(fillRatio * 100)}%`;
+      if (fillRatio <= 0) {
+        gameGaugeFillEl.classList.add('empty');
+        gameGaugeFillEl.style.width = '0%';
+      } else {
+        const pct = clamp(fillRatio, 0, 1) * 100;
+        gameGaugeFillEl.classList.remove('empty');
+        gameGaugeFillEl.style.width = `${pct.toFixed(1)}%`;
+      }
     }
     gapTextEl.textContent = String(Math.max(0, Math.ceil(state.momGap)));
     // Danger overlay intensifies when gap <= 2
@@ -657,6 +670,31 @@
     } else {
       speech.classList.add('hidden');
     }
+  }
+
+  function setCartPose(pose = 'center') {
+    if (!cartImg || !personImg) return;
+    cartImg.src = CART_IMAGES[pose] || CART_IMAGES.center;
+    personImg.src = PERSON_IMAGES[pose] || PERSON_IMAGES.center;
+  }
+
+  function resetCartPose() {
+    if (cartPoseTimer) {
+      clearTimeout(cartPoseTimer);
+      cartPoseTimer = null;
+    }
+    setCartPose('center');
+  }
+
+  function flashCartPose(side) {
+    if (!cartImg || !personImg) return;
+    const pose = side === 'L' ? 'left' : 'right';
+    setCartPose(pose);
+    if (cartPoseTimer) clearTimeout(cartPoseTimer);
+    cartPoseTimer = setTimeout(() => {
+      cartPoseTimer = null;
+      setCartPose('center');
+    }, 320);
   }
 
   function makeShelf(i){
@@ -785,6 +823,8 @@
     startScreen.classList.add('hidden');
     startScreen.classList.remove('visible');
     gameOver.classList.add('hidden');
+    characterLayer && characterLayer.classList.add('visible');
+    resetCartPose();
     requestAnimationFrame(tick);
   }
 
@@ -794,6 +834,8 @@
     playOpeningMusic();
     finalScoreEl.textContent = String(state.score);
     gameOver.classList.remove('hidden');
+    characterLayer && characterLayer.classList.remove('visible');
+    resetCartPose();
     // submit score if logged in
     const t = getToken();
     if (t) {
@@ -873,6 +915,7 @@
 
     const picked = pickItemUnderCursor(x, y);
     if (!picked) return;
+    flashCartPose(picked.side);
     // Build transient animations for current shelf items at click time
     const shelf = state.shelves[state.shelfIndex];
     const z = shelf.z - state.cameraZ;

@@ -62,6 +62,10 @@ body {
   overflow: hidden;
   transition: width 180ms ease;
 }
+.gauge-fill.empty {
+  width: 0 !important;
+  display: none;
+}
 .gauge-fill-content {
   display: flex;
   align-items: stretch;
@@ -101,21 +105,82 @@ canvas {
 #gameGauge {
   --gauge-height: 48px;
   position: absolute;
-  top: 18px;
+  top: 150px;
   left: 50%;
   transform: translateX(-50%);
   width: min(360px, 70%);
   height: var(--gauge-height);
   pointer-events: none;
-  z-index: 3;
+  z-index: 5;
 }
 
 @media (max-width: 640px) {
   #gameGauge {
     --gauge-height: 38px;
     width: 82%;
-    top: 14px;
+    top: 140px;
   }
+}
+
+.lamp-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+.lamp {
+  position: absolute;
+  left: 50%;
+  width: min(270px, 36vw);
+  height: auto;
+  transform-origin: 50% 0%;
+  filter: drop-shadow(0 10px 18px rgba(255, 215, 150, 0.25));
+  opacity: 0.95;
+  transform: translate(-50%, 0);
+}
+.lamp-layer .lamp:nth-child(1) {
+  top: 70px;
+  width: min(360px, 48vw);
+}
+.lamp-layer .lamp:nth-child(2) {
+  top: 160px;
+}
+
+.character-layer {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 588px;
+  max-width: 90vw;
+  pointer-events: none;
+  z-index: 6;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.character-layer .character {
+  display: block;
+  height: auto;
+  object-fit: contain;
+}
+.character-layer .cart {
+  width: 588px;
+  height: 351px;
+}
+.character-layer .person {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-52%);
+  width: 351px;
+  height: 588px;
+  z-index: 1;
+}
+.character-layer.visible {
+  opacity: 1;
 }
 
 #speech { position: absolute; left: 0; right: 0; bottom: 10px; display: flex; justify-content: center; pointer-events: none; z-index: 3; }
