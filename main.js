@@ -1,9 +1,7 @@
 (() => {
-  // Canvas size (matches index.html, background aspect 1811x2308)
   const WIDTH = 800;
   const HEIGHT = 1020;
 
-  // Config
   const MOM_BASE_SPEED = 0.45;
   const KID_BASE_SPEED = 0.9;
   const START_DISTANCE = 5;
@@ -42,19 +40,28 @@
   const cartTierEl = document.getElementById('cartTier');
   const capacityEl = document.getElementById('capacity');
   const gameGaugeFillEl = document.getElementById('gameGaugeFill');
+  const gameGaugeEl = document.getElementById('gameGauge');
   const characterLayer = document.querySelector('.character-layer');
   const cartImg = characterLayer ? characterLayer.querySelector('.cart') : null;
   const personImg = characterLayer ? characterLayer.querySelector('.person') : null;
   const gapTextEl = document.getElementById('gapText');
+  const gapLabelEl = document.querySelector('.gap-label');
   const startScreen = document.getElementById('startScreen');
   const gameOver = document.getElementById('gameOver');
-  const startBtn = document.getElementById('startBtn');
+  const startMomBtn = document.getElementById('startMomBtn');
+  const startScoreBtn = document.getElementById('startScoreBtn');
   const retryBtn = document.getElementById('retryBtn');
   const upgradeBtn = document.getElementById('upgradeBtn');
   const resetTierBtn = document.getElementById('resetTierBtn');
   const finalScoreEl = document.getElementById('finalScore');
   const speech = document.getElementById('speech');
   const dangerOverlay = document.getElementById('dangerOverlay');
+  const timerTextEl = document.getElementById('timerText');
+  const timerLabelEl = document.querySelector('.timer-label');
+  const memoModal = document.getElementById('memoModal');
+  const memoList = document.getElementById('memoList');
+  const memoCountdown = document.getElementById('memoCountdown');
+  const skipMemoBtn = document.getElementById('skipMemoBtn');
   // Auth/UI elements
   const loginBtn = document.getElementById('loginBtn');
   const logoutBtn = document.getElementById('logoutBtn');
@@ -250,7 +257,7 @@
   const LAYOUT_MARGIN = 50;        // matches drawScene
   const LAYOUT_SHELF_WIDTH = 250;  // matches drawScene
   const LAYOUT_BASE_OFF = 110;     // matches drawScene
-  const ITEM_BASE_SIZE = 40;       // square size base (scales with perspective)
+  const ITEM_BASE_SIZE = 40;       // square size base (원근에 따라 스케일)
 
   function computeShelfGeom(z){
     const cx = WIDTH / 2;
@@ -282,6 +289,7 @@
             const baseRect = item.side === 'L' ? placement.left : placement.right;
             if (baseRect) {
               if (item.level >= 2) return null;
+              // 엄마 모드와 동일한 원근 스케일을 유지
               const targetSize = ITEM_BASE_SIZE * scale * 2.5;
               const scaleX = baseRect.w / FURNITURE_CANONICAL.width;
               const scaleY = baseRect.h / FURNITURE_CANONICAL.height;
@@ -347,7 +355,9 @@
       const rect = computeItemRect(z, this);
       if (!rect) return;
       const { scale } = computeShelfGeom(z);
-      this.type.draw(ctx, rect, scale);
+      // 엄마 모드와 동일하게 원근 스케일 사용
+      const drawScale = scale;
+      this.type.draw(ctx, rect, drawScale);
     }
   }
 
@@ -607,7 +617,9 @@
   let state = null;
   let cartPoseTimer = null;
 
-  function initState() {
+  function initState(modeParam = null) {
+    // mode: 'mom' = 엄마의 분노(기존), 'score' = 점수제(메모/타이머)
+    const mode = (modeParam || (state && state.mode) || 'mom');
     const tierIdx = getTierIndex();
     const tier = TIERS[tierIdx];
     cartTierEl.textContent = tier.label;
@@ -618,6 +630,7 @@
       running: false,
       over: false,
       time: performance.now(),
+      mode,
       // shelf world
       shelves: [],        // [{ z, items: [{slot, type, collected}] }]
       cameraZ: 0,
@@ -633,8 +646,13 @@
       usedCapacity: 0,
       tierIdx,
       capacity: tier.capacity,
-      momGap: START_DISTANCE,
-      momWarningActive: false
+      momGap: START_DISTANCE,      // [엄마 모드] 현재 엄마와의 거리(칸 단위)
+      momWarningActive: false,     // [엄마 모드] 경고 음성/말풍선 활성화 여부
+      // score mode extras
+      timeLeft: 60,
+      targets: [],
+      targetsSet: null,
+      autoAdvance: false,
     };
 
     const furnitureInit = initFurnitureQueue();
@@ -655,34 +673,38 @@
   function updateHUD() {
     scoreEl.textContent = String(state.score);
     comboEl.textContent = String(state.combo);
-    // Show only cart capacity (size limit)
     capacityEl.textContent = `${state.capacity}`;
-    const maxGap = 12; // for bar scaling only
-    const gapRatio = clamp(state.momGap / maxGap, 0, 1);
-    const fillRatio = clamp((START_DISTANCE - state.momGap) / Math.max(START_DISTANCE, 0.0001), 0, 1);
-    if (gameGaugeFillEl) {
-      if (fillRatio <= 0) {
-        gameGaugeFillEl.classList.add('empty');
-        gameGaugeFillEl.style.width = '0%';
-      } else {
-        const pct = clamp(fillRatio, 0, 1) * 100;
-        gameGaugeFillEl.classList.remove('empty');
-        gameGaugeFillEl.style.width = `${pct.toFixed(1)}%`;
+    if (state.mode === 'mom') {
+      // 엄마 모드: 거리 게이지/경고 표시
+      timerLabelEl && timerLabelEl.classList.add('hidden');
+      gapLabelEl && gapLabelEl.classList.remove('hidden');
+      gameGaugeEl && gameGaugeEl.classList.remove('hidden');
+      const fillRatio = clamp((START_DISTANCE - state.momGap) / Math.max(START_DISTANCE, 0.0001), 0, 1);
+      if (gameGaugeFillEl) {
+        if (fillRatio <= 0) {
+          gameGaugeFillEl.classList.add('empty');
+          gameGaugeFillEl.style.width = '0%';
+        } else {
+          const pct = clamp(fillRatio, 0, 1) * 100;
+          gameGaugeFillEl.classList.remove('empty');
+          gameGaugeFillEl.style.width = `${pct.toFixed(1)}%`;
+        }
       }
-    }
-    gapTextEl.textContent = String(Math.max(0, Math.ceil(state.momGap)));
-    // Danger overlay intensifies when gap <= 2
-    const dangerAlpha = clamp(1 - (state.momGap / 2), 0, 1);
-    dangerOverlay.style.opacity = (dangerAlpha * 0.9).toFixed(2);
-    const inWarning = state.momGap <= WARNING_DISTANCE;
-    if (inWarning && !state.momWarningActive) {
-      playSound(sounds.momVoice);
-    }
-    state.momWarningActive = inWarning;
-
-    if (inWarning) {
-      speech.classList.remove('hidden');
+      gapTextEl.textContent = String(Math.max(0, Math.ceil(state.momGap)));
+      const dangerAlpha = clamp(1 - (state.momGap / 2), 0, 1);
+      dangerOverlay.style.opacity = (dangerAlpha * 0.9).toFixed(2);
+      const inWarning = state.momGap <= WARNING_DISTANCE;
+      if (inWarning && !state.momWarningActive) playSound(sounds.momVoice);
+      state.momWarningActive = inWarning;
+      if (inWarning) speech.classList.remove('hidden');
+      else speech.classList.add('hidden');
     } else {
+      // 점수제: 타이머만 표시, 경고/거리 게이지 숨김, 오버레이 끔
+      timerLabelEl && timerLabelEl.classList.remove('hidden');
+      gapLabelEl && gapLabelEl.classList.add('hidden');
+      gameGaugeEl && gameGaugeEl.classList.add('hidden');
+      timerTextEl && (timerTextEl.textContent = String(Math.max(0, Math.ceil(state.timeLeft))));
+      dangerOverlay.style.opacity = '0';
       speech.classList.add('hidden');
     }
   }
@@ -734,10 +756,16 @@
     const desiredSpeed = clamp(state.speedTarget, CAMERA_SPEED_MIN, CAMERA_SPEED_MAX);
     const lerpFactor = clamp(dt * 60 * CAMERA_SPEED_EASING, 0, 1);
     state.speedModifier = lerp(state.speedModifier, desiredSpeed, lerpFactor);
-    state.momGap -= MOM_BASE_SPEED * dt;
-    state.momGap = Math.max(MIN_DISTANCE - 0.0001, state.momGap);
-    updateHUD();
-    if (state.momGap <= MIN_DISTANCE) endGame();
+    if (state.mode === 'mom') {
+      state.momGap -= MOM_BASE_SPEED * dt;
+      state.momGap = Math.max(MIN_DISTANCE - 0.0001, state.momGap);
+      updateHUD();
+      if (state.momGap <= MIN_DISTANCE) endGame();
+    } else {
+      state.timeLeft -= dt;
+      updateHUD();
+      if (state.timeLeft <= 0) endGame();
+    }
   }
 
   function drawScene(dt){
@@ -851,6 +879,7 @@
     gameOver.classList.remove('hidden');
     characterLayer && characterLayer.classList.remove('visible');
     resetCartPose();
+    if (state && state.nextAdvanceTimer) { clearTimeout(state.nextAdvanceTimer); state.nextAdvanceTimer = null; }
     // submit score if logged in
     const t = getToken();
     if (t) {
@@ -859,7 +888,8 @@
   }
 
   function retry(){
-    initState();
+    if (state && state.nextAdvanceTimer) { clearTimeout(state.nextAdvanceTimer); state.nextAdvanceTimer = null; }
+    initState(state && state.mode ? state.mode : 'mom');
     startGame();
   }
 
@@ -873,8 +903,9 @@
     startGame();
   }
 
-  // Buttons
-  startBtn.addEventListener('click', () => { initState(); startGame(); });
+  // Buttons (mode selection)
+  startMomBtn && startMomBtn.addEventListener('click', () => { initState('mom'); startGame(); });
+  startScoreBtn && startScoreBtn.addEventListener('click', () => { beginScoreModeFlow(); });
   retryBtn.addEventListener('click', retry);
   upgradeBtn.addEventListener('click', upgradeCart);
   resetTierBtn.addEventListener('click', () => { setTierIndex(0); initState(); });
@@ -966,7 +997,9 @@
       // prevent shelf renderer from drawing again; transients handle visibility
       it.collected = true;
     }
-    // Volume-based capacity (no stacking UI). Penalty for oversize will be added later.
+    // 적재 용량/콤보/속도/점수 계산(두 모드 공통 규칙)
+    // - 용량 초과: 콤보/속도 초기화, 점수 페널티
+    // - 정상 담기: 콤보 증가, 속도 소폭 증가, 점수 가산, 포장 소리
     const vol = picked.type.volume;
     if (vol > state.capacity) {
       state.combo = 0;
@@ -983,10 +1016,19 @@
       const target = CAMERA_SPEED_BASE + volumeBoost * CAMERA_SPEED_VOLUME_FACTOR;
       state.speedTarget = clamp(target, CAMERA_SPEED_MIN, CAMERA_SPEED_MAX);
       const baseScore = picked.type.score || 10;
-      state.score += baseScore * (1 + Math.floor(state.combo/10));
+      if (state.mode === 'score') {
+        // 점수제: 메모에 있는 아이템만 +1, 그 외 0점
+        const ok = state.targetsSet && state.targetsSet.has(picked.type.key);
+        if (ok) state.score += 1;
+      } else {
+        // 엄마 모드: 기존 점수 공식 유지
+        state.score += baseScore * (1 + Math.floor(state.combo/10));
+      }
       playSound(sounds.packing);
     }
-    state.momGap += 1; // gain some distance on pick
+    if (state.mode === 'mom') {
+      state.momGap += 1; // 담을수록 엄마와의 거리 벌어짐(엄마 모드 전용)
+    }
 
     // Spawn next shelf(s) immediately at click to avoid waiting for tween end
     while (state.shelves.length < state.shelfIndex + 4) {
@@ -1034,6 +1076,7 @@
         applyFurnitureTween(state, 1);
         const nextFront = currentFrontFurnitureType();
         if (nextFront === 'fridge' && state.running) {
+          // 냉장고 구간은 즉시 자동 통과(기존 동작 유지)
           tweenToNextShelf({ auto: true, speedMultiplier: FRIDGE_AUTO_SPEED_MULT });
           return;
         }
@@ -1051,7 +1094,7 @@
     .catch(() => null)
     .finally(() => {
       furnitureImagesReady = true;
-      initState();
+      initState('mom');
       refreshUserUI();
       playOpeningMusic();
       window.addEventListener('pointerdown', () => {
@@ -1059,4 +1102,66 @@
         if (sounds.opening && sounds.opening.paused) playOpeningMusic();
       }, { once: true });
     });
+  
+  // Score mode helpers
+  function beginScoreModeFlow(){
+    initState('score');
+    setupScoreTargets();
+    showMemoOverlay(10, () => {
+      startGame();
+    });
+  }
+
+  function setupScoreTargets(){
+    const keys = Object.keys(ITEM_TYPES);
+    const shuffled = keys.slice().sort(() => Math.random() - 0.5);
+    const targets = shuffled.slice(0, 4);
+    state.targets = targets;
+    state.targetsSet = new Set(targets);
+    if (memoList) {
+      memoList.innerHTML = '';
+      for (const k of targets) {
+        const it = ITEM_TYPES[k];
+        const label = k.replace(/_/g, ' ');
+        const li = document.createElement('li');
+        const img = it && it.imagePath ? `<img src="${it.imagePath}" alt="${label}" style="height:32px;margin-right:8px;vertical-align:middle;"/>` : '';
+        li.innerHTML = `${img}<span>${label}</span>`;
+        memoList.appendChild(li);
+      }
+    }
+  }
+
+  function showMemoOverlay(seconds, onDone){
+    let remain = Math.max(1, Math.floor(seconds));
+    if (memoCountdown) memoCountdown.textContent = String(remain);
+    if (memoModal) memoModal.classList.remove('hidden');
+    let timer = null;
+    const cleanup = () => {
+      if (memoModal) memoModal.classList.add('hidden');
+      if (timer) clearInterval(timer);
+      timer = null;
+      skipMemoBtn && skipMemoBtn.removeEventListener('click', onSkip);
+    };
+    const onSkip = () => { cleanup(); onDone && onDone(); };
+    const tick = () => {
+      remain -= 1;
+      if (memoCountdown) memoCountdown.textContent = String(Math.max(0, remain));
+      if (remain <= 0) {
+        cleanup();
+        onDone && onDone();
+      }
+    };
+    skipMemoBtn && skipMemoBtn.addEventListener('click', onSkip);
+    timer = setInterval(tick, 1000);
+  }
+
+  function scheduleNextScoreAdvance(delayMs){
+    if (!state || !state.running) return;
+    if (state.nextAdvanceTimer) clearTimeout(state.nextAdvanceTimer);
+    state.nextAdvanceTimer = setTimeout(() => {
+      if (!state || !state.running) return;
+      // 이동 속도를 완만하게 하여 선택 시간을 확보
+      tweenToNextShelf({ auto: true, speedMultiplier: 1.0 });
+    }, Math.max(0, delayMs|0));
+  }
 })();
