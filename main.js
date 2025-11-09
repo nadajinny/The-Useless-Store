@@ -19,7 +19,7 @@
 
 
   // Shelf/3D config
-  const LEVELS_PER_SIDE = 2;    // left: 2 levels, right: 2 levels (total 4 slots)
+  const LEVELS_PER_SIDE = 3;    // left: 3 levels, right: 3 levels (total 6 slots)
   const SHELF_GAP = 10;          // distance between bays (world units)
   const SHELF_FLOOR_GAP = 80;
   const FOV = 400;              // pseudo perspective focal length
@@ -288,7 +288,7 @@
           if (placement) {
             const baseRect = item.side === 'L' ? placement.left : placement.right;
             if (baseRect) {
-              if (item.level >= 2) return null;
+              if (item.level >= LEVELS_PER_SIDE || BOX_FLOOR_PX[item.level] == null) return null;
               // 엄마 모드와 동일한 원근 스케일을 유지
               const targetSize = ITEM_BASE_SIZE * scale * 2.5;
               const scaleX = baseRect.w / FURNITURE_CANONICAL.width;
@@ -299,7 +299,8 @@
               const desiredX = item.side === 'L'
                 ? baseRect.x + edgePx
                 : baseRect.x + baseRect.w - edgePx - targetSize;
-              const desiredY = floorY - targetSize - floorPx;
+              const topAdjust = (item.level === LEVELS_PER_SIDE - 1) ? BOX_TOP_LEVEL_OFFSET * scaleY : 0;
+              const desiredY = floorY - targetSize - floorPx + topAdjust;
               rect = {
                 x: clamp(desiredX, baseRect.x, baseRect.x + baseRect.w - targetSize),
                 y: clamp(desiredY, baseRect.y, floorY - targetSize),
@@ -335,7 +336,35 @@
         this.loadImage();
       }
       if (this.image && this.imageLoaded) {
-        ctx.drawImage(this.image, rect.x, rect.y, rect.w, rect.h);
+        const naturalW = this.image.naturalWidth || this.image.width || rect.w;
+        const naturalH = this.image.naturalHeight || this.image.height || rect.h;
+        if (naturalW > 0 && naturalH > 0) {
+          const aspect = naturalW / naturalH;
+          let drawW = rect.w;
+          let drawH = rect.h;
+          if (aspect >= 1) {
+            drawW = rect.w;
+            drawH = rect.w / aspect;
+            if (drawH > rect.h) {
+              const s = rect.h / drawH;
+              drawW *= s;
+              drawH *= s;
+            }
+          } else {
+            drawH = rect.h;
+            drawW = rect.h * aspect;
+            if (drawW > rect.w) {
+              const s = rect.w / drawW;
+              drawW *= s;
+              drawH *= s;
+            }
+          }
+          const dx = rect.x + (rect.w - drawW) / 2;
+          const dy = rect.y + (rect.h - drawH) / 2;
+          ctx.drawImage(this.image, dx, dy, drawW, drawH);
+        } else {
+          ctx.drawImage(this.image, rect.x, rect.y, rect.w, rect.h);
+        }
         return;
       }
       // Fallback: draw colored square matching clickable area
@@ -390,7 +419,8 @@
   };
   const BOX_EDGE_OFFSET_RATIO = 57 / FURNITURE_CANONICAL.width;
   const BOX_EDGE_PX = 130;
-  const BOX_FLOOR_PX = [160, 360];
+  const BOX_FLOOR_PX = [160, 260, 360];
+  const BOX_TOP_LEVEL_OFFSET = 24; // canonical px offset to lower top-shelf items
   const CART_IMAGES = {
     center: 'assets/images/cart.png',
     left: 'assets/images/cart_left.png',
@@ -398,9 +428,14 @@
   };
   const PERSON_IMAGES = {
     center: 'assets/images/person_front.png',
-    left: 'assets/images/person_left.png',
-    right: 'assets/images/person_right.png',
+    left: 'assets/images/person_left2.png',
+    right: 'assets/images/person_right2.png',
+    left1: 'assets/images/person_left1.png',
+    left2: 'assets/images/person_left2.png',
+    right1: 'assets/images/person_right1.png',
+    right2: 'assets/images/person_right2.png',
   };
+  const PERSON_FRAME_DELAY = 80;
   const FURNITURE_PROFILES = {
     bookshelf: [
       { y: 0, width: 129, height: 290, edge: 0 },
@@ -616,6 +651,7 @@
   // Game state
   let state = null;
   let cartPoseTimer = null;
+  let personPoseTimers = [];
 
   function initState(modeParam = null) {
     // mode: 'mom' = 엄마의 분노(기존), 'score' = 점수제(메모/타이머)
@@ -709,10 +745,29 @@
     }
   }
 
-  function setCartPose(pose = 'center') {
-    if (!cartImg || !personImg) return;
+  function setPersonImage(poseKey = 'center') {
+    if (!personImg) return;
+    const src = PERSON_IMAGES[poseKey] || PERSON_IMAGES.center;
+    personImg.src = src;
+  }
+
+  function clearPersonPoseTimers() {
+    if (!personPoseTimers.length) return;
+    for (const timer of personPoseTimers) {
+      clearTimeout(timer);
+    }
+    personPoseTimers = [];
+  }
+
+  function setCartPose(pose = 'center', { skipPerson = false } = {}) {
+    if (!cartImg) return;
     cartImg.src = CART_IMAGES[pose] || CART_IMAGES.center;
-    personImg.src = PERSON_IMAGES[pose] || PERSON_IMAGES.center;
+    if (!personImg || skipPerson) return;
+    if (pose === 'center') {
+      clearPersonPoseTimers();
+    }
+    const personPose = pose === 'left' ? 'left2' : pose === 'right' ? 'right2' : 'center';
+    setPersonImage(personPose);
   }
 
   function resetCartPose() {
@@ -723,10 +778,22 @@
     setCartPose('center');
   }
 
+  function animatePersonSide(side) {
+    if (!personImg) return;
+    clearPersonPoseTimers();
+    const frames = side === 'L' ? ['left1', 'left2'] : ['right1', 'right2'];
+    setPersonImage(frames[0]);
+    const timer = setTimeout(() => {
+      setPersonImage(frames[1]);
+    }, PERSON_FRAME_DELAY);
+    personPoseTimers.push(timer);
+  }
+
   function flashCartPose(side) {
     if (!cartImg || !personImg) return;
     const pose = side === 'L' ? 'left' : 'right';
-    setCartPose(pose);
+    setCartPose(pose, { skipPerson: true });
+    animatePersonSide(side);
     if (cartPoseTimer) clearTimeout(cartPoseTimer);
     cartPoseTimer = setTimeout(() => {
       cartPoseTimer = null;
